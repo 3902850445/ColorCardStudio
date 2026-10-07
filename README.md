@@ -221,13 +221,20 @@ payload（程序本体）作为嵌入资源打进 exe，含 Zip Slip 路径校�
 | 平台 | 预装 .NET | WebView 依赖 |
 | --- | --- | --- |
 | Windows x64/ARM64 | 需 .NET 8（或用自包含包） | Edge WebView2 Runtime（Win11 已内置） |
-| Linux x64/ARM64 | 同上 | `libwebkit2gtk-4.0-37`、`libgtk-3-0` |
+| Linux x64/ARM64 | 同上 | WebKit2GTK + `libgtk-3-0`（包名随系统版本，见下） |
 | macOS Intel/Apple Silicon | 同上 | 系统自带 WebKit |
 
-Debian/Ubuntu：
+Debian/Ubuntu（包名随版本不同）：
+
 ```bash
+# Ubuntu 24.04+ / Debian 12+ 用 4.1
+sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0
+
+# Ubuntu 22.04 等旧版本用 4.0
 sudo apt install libwebkit2gtk-4.0-37 libgtk-3-0
 ```
+
+> WebKit 是**运行时**依赖，仅目标机器安装；打包（交叉编译）时不需要。
 
 ## 构建（直接用 dotnet）
 

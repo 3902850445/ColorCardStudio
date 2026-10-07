@@ -436,13 +436,18 @@ notes.AppendLine();
 notes.AppendLine("| 平台 | 需要预装 | WebView 依赖 |");
 notes.AppendLine("| --- | --- | --- |");
 notes.AppendLine("| Windows x64 / ARM64 | Windows 10 1809+（含 WebView2） | Edge WebView2 Runtime（Win11 已内置） |");
-notes.AppendLine("| Linux x64 / ARM64 | .NET 8 运行时（自包含包免装） | libwebkit2gtk-4.0-37 及 GTK3 |");
+notes.AppendLine("| Linux x64 / ARM64 | .NET 8 运行时（自包含包免装） | WebKit2GTK + GTK3（见下方按发行版安装） |");
 notes.AppendLine("| macOS Intel / Apple Silicon | macOS 11+ | 系统自带 WebKit |");
 notes.AppendLine();
-notes.AppendLine("Debian/Ubuntu 安装 WebKit：");
+notes.AppendLine("Debian/Ubuntu 安装 WebKit（包名随版本不同）：");
 notes.AppendLine("```bash");
+notes.AppendLine("# Ubuntu 24.04+ / Debian 12+ 用 4.1");
+notes.AppendLine("sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0");
+notes.AppendLine("# Ubuntu 22.04 等旧版用 4.0");
 notes.AppendLine("sudo apt install libwebkit2gtk-4.0-37 libgtk-3-0");
 notes.AppendLine("```");
+notes.AppendLine("");
+notes.AppendLine("注：WebKit 是**运行时**依赖，打包（交叉编译）时无需安装。");
 notes.AppendLine();
 notes.AppendLine("## 安装包格式");
 notes.AppendLine();
@@ -538,7 +543,7 @@ static string BuildDebControl(string arch)
         $"Architecture: {arch}",
         "Maintainer: ColorMod <dev@colormod.local>",
         $"Installed-Size: {size}",
-        "Depends: libc6, libwebkit2gtk-4.0-37, libgtk-3-0",
+        "Depends: libc6, libgtk-3-0, libwebkit2gtk-4.1-0",
         "Description: CMOK 色卡工坊（基于 Photino.NET 的桌面色卡查询与图片取色工具）",
         " 支持印刷标准换算、色卡分类检索与预设管理。",
         "",
