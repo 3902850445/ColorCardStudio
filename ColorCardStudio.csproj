@@ -1,0 +1,41 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- 用 net8.0（不带 -windows）以便跨平台发布 -->
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ColorCardStudio</RootNamespace>
+    <AssemblyName>ColorMod</AssemblyName>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- build.csx 会传入这些开关 -->
+    <SelfContained Condition="'$(SelfContained)' == 'true'">true</SelfContained>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == 'true'">true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(PublishSingleFile)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile Condition="'$(PublishSingleFile)' == 'true'">true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.7" />
+  </ItemGroup>
+
+  <!-- 前端资源随程序发布（正斜杠路径，跨平台通用） -->
+  <ItemGroup>
+    <Content Include="wwwroot/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- 构建脚本与产物不参与编译 -->
+  <ItemGroup>
+    <Compile Remove="build/**" />
+    <None Remove="build/**" />
+    <Content Remove="build/**" />
+    <Compile Remove="artifacts/**" />
+    <None Remove="artifacts/**" />
+    <Content Remove="artifacts/**" />
+  </ItemGroup>
+
+</Project>
