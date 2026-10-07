@@ -23,3 +23,8 @@ git_key.txt
 # 安装壳构建输出
 build/SetupLauncher/bin/
 build/SetupLauncher/obj/
+
+# 令牌文件（严禁提交）
+github_key.txt
+git_key.txt
+*.pat
