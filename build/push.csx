@@ -8,7 +8,9 @@
 //   dotnet-script build/push.csx -- --retries 5            # 推送重试次数（默认 3）
 //   dotnet-script build/push.csx -- --timeout 300          # 每次尝试超时秒数（默认 120）
 //   dotnet-script build/push.csx -- --dry-run              # 只看将推送什么
-//   dotnet-script build/push.csx -- --ssh                  # 走 SSH 通道（绕过 HTTPS 代理故障）
+//   dotnet-script build/push.csx -- --ssh                  # 走 SSH 通道
+//   dotnet-script build/push.csx -- --proxy http://127.0.0.1:3066   # 指定代理端口
+//   COLORPROD_PROXY=http://127.0.0.1:3066 dotnet-script build/push.csx
 //
 // 设计要点：
 //   1. 全程实时输出状态（每步打时间戳），长时间无输出会自动打印「仍在进行」心跳，
@@ -60,6 +62,7 @@ int timeoutSec = int.TryParse(optOf("timeout", "120"), out var t) ? Math.Max(30,
 bool skipBuild = hasFlag("skip-build");
 bool dryRun = hasFlag("dry-run");
 bool useSsh = hasFlag("ssh");
+string proxyOverride = optOf("proxy", "");
 
 // ---------------------------------------------------------------- 状态输出
 var stepNo = 0;
@@ -81,6 +84,51 @@ void Warn(string msg) => Say("WARN", msg);
 void Err(string msg) => Say("FAIL", msg);
 
 /// <summary>执行外部命令，实时转发输出，并打印心跳防止误认为卡死。</summary>
+// ---------------------------------------------------------------- 代理探测
+// Karing 等本地代理客户端会监听若干端口，其中一个是 HTTP 代理。
+// 这里自动探测，避免硬编码端口号（版本升级会变）。
+
+string detectedProxy = "";
+
+/// <summary>依次探测候选端口，返回第一个能代理 GitHub 的 HTTP 代理地址。</summary>
+string DetectProxy(bool verbose)
+{
+    // 优先用环境变量，其次用自动探测
+    string fromEnv = Environment.GetEnvironmentVariable("COLORPROD_PROXY")
+                     ?? Environment.GetEnvironmentVariable("HTTPS_PROXY");
+    if (!string.IsNullOrEmpty(fromEnv)) return fromEnv;
+
+    int[] candidates = { 3066, 3067, 7890, 7897, 1080, 10809, 20171 };
+    if (verbose) Info($"正在探测本地代理（候选端口：{string.Join(", ", candidates)}）…");
+
+    foreach (int port in candidates)
+    {
+        string url = $"http://127.0.0.1:{port}";
+        var (_, outp) = Run("curl",
+            new[] { "-s", "-m", "8", "-x", url, "-w", "\nHTTP:%{http_code}",
+                    "https://api.github.com/rate_limit" },
+            15, echo: false);
+        if (outp.Contains("HTTP:200"))
+        {
+            if (verbose) Ok($"发现可用代理：{url}");
+            return url;
+        }
+    }
+    return null;
+}
+
+/// <summary>把探测到的代理写入子进程环境变量。</summary>
+void ApplyProxy(ProcessStartInfo psi)
+{
+    if (string.IsNullOrEmpty(detectedProxy)) return;
+    psi.Environment["HTTPS_PROXY"] = detectedProxy;
+    psi.Environment["HTTP_PROXY"] = detectedProxy;
+    psi.Environment["https_proxy"] = detectedProxy;
+    psi.Environment["http_proxy"] = detectedProxy;
+    // git 需显式允许代理（部分版本默认不读环境变量）
+    psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+}
+
 (int code, string output) Run(string file, IEnumerable<string> args, int timeoutSeconds, bool echo = true)
 {
     var psi = new ProcessStartInfo(file)
@@ -91,6 +139,7 @@ void Err(string msg) => Say("FAIL", msg);
         CreateNoWindow = true,
     };
     foreach (var a in args) psi.ArgumentList.Add(a);
+    ApplyProxy(psi);
 
     using var proc = new Process { StartInfo = psi };
     var sb = new StringBuilder();
@@ -155,6 +204,7 @@ void Err(string msg) => Say("FAIL", msg);
     // 显式指定私钥与已知主机，避开交互提示与主机密钥确认
     psi.Environment["GIT_SSH_COMMAND"] =
         "ssh -i \"" + sshKeyPath + "\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=25";
+    ApplyProxy(psi);
 
     using var proc = new Process { StartInfo = psi };
     var sb = new StringBuilder();
@@ -330,6 +380,23 @@ if (dryRun)
     Console.WriteLine();
     Warn("dry-run 模式，未执行任何推送");
     return 0;
+}
+
+// 3.5) 探测本地代理
+Console.WriteLine();
+Step("探测本地代理");
+detectedProxy = !string.IsNullOrEmpty(proxyOverride)
+    ? proxyOverride
+    : DetectProxy(true);
+if (detectedProxy != null)
+{
+    Ok($"使用代理：{detectedProxy}");
+}
+else
+{
+    Warn("未发现可用的本地 HTTP 代理，将直连");
+    Info("若使用 Karing 等代理工具，请确认其已启动并开启 HTTP 代理端口");
+    Info("也可显式指定：dotnet-script build/push.csx -- --proxy http://127.0.0.1:3066");
 }
 
 // 4) 推送（带重试）
