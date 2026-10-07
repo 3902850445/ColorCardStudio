@@ -8,6 +8,7 @@
 //   dotnet-script build/push.csx -- --retries 5            # 推送重试次数（默认 3）
 //   dotnet-script build/push.csx -- --timeout 300          # 每次尝试超时秒数（默认 120）
 //   dotnet-script build/push.csx -- --dry-run              # 只看将推送什么
+//   dotnet-script build/push.csx -- --ssh                  # 走 SSH 通道（绕过 HTTPS 代理故障）
 //
 // 设计要点：
 //   1. 全程实时输出状态（每步打时间戳），长时间无输出会自动打印「仍在进行」心跳，
@@ -27,6 +28,10 @@ using System.Text.RegularExpressions;
 using System.Threading;
 
 try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+
+// SSH 私钥路径（RunWithSshKey 会引用，故需先于该函数声明）
+string sshKeyPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh", "id_ed25519_github");
 
 // ---------------------------------------------------------------- 参数
 string[] rawArgs = ReadScriptArgs();
@@ -54,6 +59,7 @@ int retries = int.TryParse(optOf("retries", "3"), out var r) ? Math.Max(1, r) : 
 int timeoutSec = int.TryParse(optOf("timeout", "120"), out var t) ? Math.Max(30, t) : 120;
 bool skipBuild = hasFlag("skip-build");
 bool dryRun = hasFlag("dry-run");
+bool useSsh = hasFlag("ssh");
 
 // ---------------------------------------------------------------- 状态输出
 var stepNo = 0;
@@ -131,6 +137,68 @@ void Err(string msg) => Say("FAIL", msg);
     return (proc.ExitCode, sb.ToString());
 }
 
+/// <summary>
+/// 同 Run，但通过 GIT_SSH_COMMAND 指定专用私钥。
+/// 避免启动 ssh-agent（非交互环境下会阻塞等待）。
+/// </summary>
+(int code, string output) RunWithSshKey(string file, IEnumerable<string> args, int timeoutSeconds)
+{
+    var psi = new ProcessStartInfo(file)
+    {
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        UseShellExecute = false,
+        CreateNoWindow = true,
+    };
+    foreach (var a in args) psi.ArgumentList.Add(a);
+
+    // 显式指定私钥与已知主机，避开交互提示与主机密钥确认
+    psi.Environment["GIT_SSH_COMMAND"] =
+        "ssh -i \"" + sshKeyPath + "\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=25";
+
+    using var proc = new Process { StartInfo = psi };
+    var sb = new StringBuilder();
+
+    void Drain(string line)
+    {
+        if (string.IsNullOrEmpty(line)) return;
+        lock (sb)
+        {
+            sb.AppendLine(line);
+            Console.WriteLine("      \u2502 " + line);
+        }
+    }
+
+    proc.OutputDataReceived += (_, e) => Drain(e.Data ?? string.Empty);
+    proc.ErrorDataReceived += (_, e) => Drain(e.Data ?? string.Empty);
+
+    proc.Start();
+    proc.BeginOutputReadLine();
+    proc.BeginErrorReadLine();
+
+    var runStart = DateTime.Now;
+    var deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+    var lastBeat = DateTime.UtcNow;
+    while (!proc.HasExited)
+    {
+        Thread.Sleep(300);
+        if (DateTime.UtcNow > deadline)
+        {
+            Warn($"超过 {timeoutSeconds} 秒仍未结束，终止");
+            try { proc.Kill(true); } catch { }
+            break;
+        }
+        if (DateTime.UtcNow - lastBeat > TimeSpan.FromSeconds(10))
+        {
+            lastBeat = DateTime.UtcNow;
+            Info($"SSH 仍在进行… 已耗时 {(DateTime.Now - runStart).TotalSeconds:F0} 秒（pid={proc.Id}）");
+        }
+    }
+
+    proc.WaitForExit(5000);
+    return (proc.ExitCode, sb.ToString());
+}
+
 // ---------------------------------------------------------------- 环境
 var root = FindRepoRoot();
 string keyFile = FindKeyFile();
@@ -159,6 +227,48 @@ if (!File.Exists(project))
 }
 Ok("git 与项目文件就绪");
 
+// 1.5) SSH 通道（如指定 --ssh）
+string sshUrl = "git@github.com:3902850445/ColorCardStudio.git";
+if (useSsh)
+{
+    Step("准备 SSH 通道");
+    var sshDir = Path.GetDirectoryName(sshKeyPath)!;
+    Directory.CreateDirectory(sshDir);
+
+    if (!File.Exists(sshKeyPath))
+    {
+        Info("未检测到专用 SSH 密钥，正在生成 …");
+        var (kCode, kOut) = Run("ssh-keygen",
+            new[] { "-t", "ed25519", "-f", sshKeyPath, "-N", "", "-C", "colormod-github" }, 60);
+        if (kCode != 0)
+        {
+            Err("密钥生成失败：" + kOut.Trim());
+            return 1;
+        }
+        Ok("已生成密钥对");
+    }
+    else Ok("已存在专用密钥");
+
+    string pub = sshKeyPath + ".pub";
+    if (!File.Exists(pub))
+    {
+        Err("找不到公钥文件 " + pub);
+        return 1;
+    }
+
+    // 不启动 ssh-agent（非交互 shell 会阻塞）；改用 GIT_SSH_COMMAND 指定私钥
+    Info("已指定专用私钥，无需 ssh-agent");
+
+    Console.WriteLine();
+    Warn("首次使用需把下面这行公钥添加到 GitHub：");
+    Info("  仓库 Settings → SSH and GPG keys → New SSH key");
+    Console.WriteLine();
+    Console.WriteLine("      " + File.ReadAllText(pub).Trim());
+    Console.WriteLine();
+    Info("添加后重新运行本脚本即可。");
+    if (dryRun) return 0;
+}
+
 // 2) 读取令牌
 Step("读取访问令牌");
 if (keyFile == null)
@@ -179,12 +289,14 @@ foreach (var raw in File.ReadAllLines(keyFile))
     if (m.Success) token = m.Groups[1].Value;
 }
 
-if (string.IsNullOrWhiteSpace(token))
+if (string.IsNullOrWhiteSpace(token) && !useSsh)
 {
-    Err($"未能从 {keyFile} 解析出令牌");
+    Err($"未能从 {keyFile} 解析出令牌（HTTPS 模式必需；或改用 --ssh）");
     return 1;
 }
-Ok($"令牌已读取（用户 {user}，长度 {token.Length}，不显示内容）");
+Ok(useSsh
+    ? "SSH 模式，令牌非必需"
+    : $"令牌已读取（用户 {user}，长度 {token.Length}，不显示内容）");
 
 // 3) 检查待推送内容
 Step("检查工作区状态");
@@ -225,6 +337,8 @@ Console.WriteLine();
 Step($"推送到 GitHub（最多 {retries} 次尝试）");
 
 string authUrl = $"https://{Uri.EscapeDataString(user)}:{Uri.EscapeDataString(token)}@github.com/3902850445/ColorCardStudio.git";
+string pushUrl = useSsh ? sshUrl : authUrl;
+if (useSsh) Info("使用 SSH 通道推送");
 bool pushed = false;
 string lastOutput = "";
 
@@ -232,13 +346,8 @@ for (int attempt = 1; attempt <= retries && !pushed; attempt++)
 {
     Info($"第 {attempt}/{retries} 次尝试…");
 
-    var (code, output) = Run("git",
-        new[]
-        {
-            "-c", "credential.helper=",
-            "-c", "http.postBuffer=524288000",
-            "push", authUrl, $"{branch}:{branch}",
-        },
+    var (code, output) = RunWithSshKey("git",
+        new[] { "push", pushUrl, $"{branch}:{branch}" },
         timeoutSec);
 
     lastOutput = output;
@@ -292,9 +401,9 @@ if (!pushed)
 // 5) 验证远程分支
 Console.WriteLine();
 Step("验证远程状态");
-var (lsCode, lsOut) = Run("git",
-    new[] { "-c", "credential.helper=", "ls-remote", authUrl, $"refs/heads/{branch}" },
-    60, false);
+var (lsCode, lsOut) = useSsh
+    ? RunWithSshKey("git", new[] { "ls-remote", pushUrl, $"refs/heads/{branch}" }, 60)
+    : Run("git", new[] { "ls-remote", pushUrl, $"refs/heads/{branch}" }, 60, false);
 if (lsCode == 0 && lsOut.Trim().Length > 0)
 {
     var sha = lsOut.Trim().Split('\t')[0];
@@ -306,7 +415,7 @@ else
 }
 
 // 6) 触发云构建（可选）
-if (!skipBuild)
+if (!skipBuild && !string.IsNullOrWhiteSpace(token))
 {
     Console.WriteLine();
     Step("触发 GitHub Actions 云构建");
@@ -340,7 +449,7 @@ if (!skipBuild)
         }
     }
 }
-else
+else if (skipBuild)
 {
     Info("已跳过云构建触发（--skip-build）");
     Info("手动触发：https://github.com/3902850445/ColorCardStudio/actions");
