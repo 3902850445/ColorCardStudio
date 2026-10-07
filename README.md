@@ -190,11 +190,29 @@ dotnet-script build/pack.csx -- --runtime win-x64,linux-x64,osx-arm64
 # 每个平台独立运行，目标机器无需预装 .NET
 dotnet-script build/pack.csx -- --all --self-contained
 
-# 打包后生成 zip，并附带平台运行时说明
-dotnet-script build/pack.csx -- --all --zip
+# 生成 zip + Windows 安装程序 + Linux deb
+dotnet-script build/pack.csx -- --all --zip --linux-pkg
+
+# macOS dmg（需在 macOS 上执行）
+dotnet-script build/pack.csx -- --runtime osx-arm64 --dmg --zip
 ```
 
-产物输出到 `artifacts/<rid>/`，脚本会校验主程序与 `wwwroot` 资源是否齐全。
+产物输出到 `artifacts/`，脚本会校验主程序与 `wwwroot` 资源是否齐全。
+
+### 分发格式
+
+| 格式 | 产物 | 说明 |
+| --- | --- | --- |
+| Windows 安装程序 | `ColorMod-Setup-win-x64.exe` | **自解压单文件**，双击即安装到 `%LOCALAPPDATA%\Programs\ColorMod` 并启动，无需 .NET |
+| zip | `ColorMod-<rid>-release.zip` | 解压后直接运行，跨平台通用 |
+| deb | `colormod_<版本>_<arch>.deb` | `sudo dpkg -i` 安装，提供 `colormod` 命令 |
+| dmg | `ColorMod-<rid>.dmg` | 需在 macOS 上用系统自带 `hdiutil` 生成 |
+
+安装壳源码在 `build/SetupLauncher/`，以单文件方式发布，
+payload（程序本体）作为嵌入资源打进 exe，含 Zip Slip 路径校验。
+
+所有归档（zip / tar / ar）均由脚本用 .NET 内置能力直接生成，
+**不依赖 7-zip、ar、rpmbuild 等外部工具**。
 
 > `dotnet-script` 可用 `dotnet tool install -g dotnet-script` 安装。
 

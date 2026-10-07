@@ -19,3 +19,7 @@ logs/
 git_key.txt
 *.key
 *.token
+
+# 安装壳构建输出
+build/SetupLauncher/bin/
+build/SetupLauncher/obj/
