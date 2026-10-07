@@ -14,7 +14,7 @@
 //   COLORPROD_PROXY=http://127.0.0.1:3066 dotnet-script build/push.csx
 //
 // 设计要点：
-//   0. 仓库内只允许 csx / ps1 / py 脚本，CI 工作流由 build/workflow.csx 生成。
+//   0. 仓库内只使用 csx 脚本，CI 工作流由 build/workflow.csx 生成。
 //      本脚本推送前临时生成并暂存，推送后从索引移除（文件留在本地）。
 //   1. 全程实时输出状态（每步打时间戳），长时间无输出会自动打印「仍在进行」心跳，
 //      避免看起来像卡死。
@@ -94,33 +94,77 @@ void Err(string msg) => Say("FAIL", msg);
 
 string detectedProxy = "";
 
-/// <summary>依次探测候选端口，返回第一个能代理 GitHub 的 HTTP 代理地址。</summary>
+/// <summary>
+/// 探测本地 HTTP 代理端口。
+/// 注意：必须用 git 自身验证 —— curl 能走通的端口未必被 git 的
+/// CONNECT 支持（实测 SOCKS 端口 curl 返回 200，但 git 报 TLS 失败）。
+/// </summary>
 string DetectProxy(bool verbose)
 {
-    // 优先用环境变量，其次用自动探测
     string fromEnv = Environment.GetEnvironmentVariable("COLORPROD_PROXY")
                      ?? Environment.GetEnvironmentVariable("HTTPS_PROXY");
-    if (!string.IsNullOrEmpty(fromEnv)) return fromEnv;
+    if (!string.IsNullOrEmpty(fromEnv))
+    {
+        if (verbose) Info($"使用环境变量指定的代理：{fromEnv}");
+        return fromEnv;
+    }
 
-    // Karing 等客户端的端口可能变动（含 49152+ 动态端口），故先试常见值
     int[] candidates = { 3066, 3067, 7890, 7897, 1080, 10809, 20171, 8888, 1087 };
-    if (verbose) Info($"正在探测本地代理（候选端口：{string.Join(", ", candidates)}）…");
-    if (verbose) Info("提示：Karing 的 HTTP 代理端口可在其设置中查看，也可用 --proxy 指定");
+    if (verbose) Info($"探测本地代理（候选：{string.Join(", ", candidates)}）…");
+
+    // 令牌用于让 git 完成认证，从而真实走通 HTTPS 通道
+    string probeToken = "x";
+    foreach (var raw in File.ReadAllLines(keyFile))
+    {
+        var m = Regex.Match(raw, @"密码[：:]\s*(\S+)");
+        if (m.Success) { probeToken = m.Groups[1].Value; break; }
+    }
+    string probeUrl =
+        $"https://{Uri.EscapeDataString("3902850445")}:{Uri.EscapeDataString(probeToken)}@github.com/3902850445/ColorCardStudio.git";
 
     foreach (int port in candidates)
     {
         string url = $"http://127.0.0.1:{port}";
-        var (_, outp) = Run("curl",
-            new[] { "-s", "-m", "8", "-x", url, "-w", "\nHTTP:%{http_code}",
-                    "https://api.github.com/rate_limit" },
-            15, echo: false);
-        if (outp.Contains("HTTP:200"))
+        if (verbose) Info($"  测试 {url} …");
+
+        var psi = new ProcessStartInfo("git")
         {
-            if (verbose) Ok($"发现可用代理：{url}");
-            return url;
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add("credential.helper=");
+        psi.ArgumentList.Add("ls-remote");
+        psi.ArgumentList.Add(probeUrl);
+        psi.ArgumentList.Add("HEAD");
+        psi.Environment["https_proxy"] = url;
+        psi.Environment["HTTPS_PROXY"] = url;
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+
+        try
+        {
+            using var p = Process.Start(psi);
+            if (p == null) continue;
+            var so = p.StandardOutput.ReadToEnd();
+            p.WaitForExit(20000);
+
+            // 能拿到 refs 输出（即使为空）或返回 0，都说明通道已打通
+            bool reachable = p.ExitCode == 0 || so.Contains("refs/heads");
+            if (reachable)
+            {
+                if (verbose) Ok($"可用代理：{url}");
+                return url;
+            }
+            if (verbose) Info("    不可用");
+        }
+        catch
+        {
+            if (verbose) Info("    异常");
         }
     }
-    return null;
+    return "";
 }
 
 /// <summary>把探测到的代理写入子进程环境变量。</summary>
@@ -400,12 +444,13 @@ if (detectedProxy != null)
 }
 else
 {
-    Warn("未发现可用的本地 HTTP 代理，将直连");
-    Info("若使用 Karing 等代理工具，请确认其已启动并开启 HTTP 代理端口");
-    Info("也可显式指定：dotnet-script build/push.csx -- --proxy http://127.0.0.1:3066");
+    Warn("未发现可用的本地 HTTP 代理，将尝试直连");
+    Info("若使用 Karing 等代理工具，请确认其已启动，且开启了 HTTP 代理端口");
+    Info("在 Karing 中查看端口后，用 --proxy 显式指定：");
+    Info("  dotnet-script build/push.csx -- --proxy http://127.0.0.1:3066");
 }
 
-// 3.6) CI 工作流：仓库只保留 csx/ps1/py，yml 由脚本生成
+// 3.6) CI 工作流：仓库只保留 csx 脚本，yml 由脚本生成
 //      GitHub 需要仓库里存在该文件才能运行云构建，故这里临时生成并提交，
 //      推送成功后立即从索引移除（文件留在本地磁盘，随时可再生成）。
 if (!skipWorkflow)
@@ -578,34 +623,76 @@ if (!skipBuild && !string.IsNullOrWhiteSpace(token))
 {
     Console.WriteLine();
     Step("触发 GitHub Actions 云构建");
+    // 直接用 C# HttpClient 调 GitHub API 触发 workflow_dispatch（不依赖外部脚本）
+    string apiUrl = "https://api.github.com/repos/3902850445/ColorCardStudio"
+                     + "/actions/workflows/release.yml/dispatches";
+    Info("正在调用 GitHub API 触发工作流 …");
+    Info("  POST /repos/3902850445/ColorCardStudio/actions/workflows/release.yml/dispatches");
+    Info("  ref = " + branch);
 
-    // 调用独立的 PowerShell 模板（避免在 csx 里做多层转义）
-    string ps1 = Path.Combine(root, "build", "trigger-workflow.ps1");
-    if (!File.Exists(ps1))
+    string apiResult;
+    try
     {
-        Warn("缺少 build/trigger-workflow.ps1，跳过自动触发");
-        Info("手动触发：https://github.com/3902850445/ColorCardStudio/actions");
-    }
-    else
-    {
-        var (apiCode, apiOut) = Run("powershell",
-            new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ps1,
-                    "-Token", token, "-Repo", "3902850445/ColorCardStudio", "-Ref", branch },
-            90, false);
-
-        if (apiOut.Contains("DISPATCH_OK"))
+        var handler = new System.Net.Http.HttpClientHandler
         {
-            Ok("云构建已触发");
-            Info("查看进度：https://github.com/3902850445/ColorCardStudio/actions");
-            Info("（首次运行需在 Actions 页面点「I understand my workflows, enable them」）");
+            UseProxy = !string.IsNullOrEmpty(detectedProxy),
+        };
+        if (!string.IsNullOrEmpty(detectedProxy))
+            handler.Proxy = new System.Net.WebProxy(detectedProxy);
+
+        using var http = new System.Net.Http.HttpClient(handler)
+        {
+            Timeout = TimeSpan.FromSeconds(60),
+        };
+        http.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        http.DefaultRequestHeaders.Add("Accept", "application/vnd.github+json");
+        http.DefaultRequestHeaders.Add("User-Agent", "ColorMod-PushScript");
+        http.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+
+        var payload = new System.Net.Http.StringContent(
+            "{\"ref\":\"" + branch + "\"}", Encoding.UTF8, "application/json");
+
+        var resp = http.PostAsync(apiUrl, payload).GetAwaiter().GetResult();
+
+        if (resp.IsSuccessStatusCode)
+        {
+            apiResult = "DISPATCH_OK (HTTP " + (int)resp.StatusCode + ")";
         }
         else
         {
-            Warn("云构建未能自动触发（不影响代码已推送）");
-            foreach (var line in apiOut.Trim().Split('\n').TakeLast(3))
-                Info("  " + line);
-            Info("可手动触发：仓库 Actions 页面 → 跨平台构建与发布 → Run workflow");
+            string body = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            apiResult = "DISPATCH_FAIL: HTTP " + (int)resp.StatusCode
+                        + " " + ExtractApiMessage(body);
+
+            if ((int)resp.StatusCode == 403)
+            {
+                Warn("403：令牌可能缺 Actions: Read and write 权限，或工作流尚未启用");
+                Info("首次使用需在 Actions 页面点「I understand my workflows, enable them」");
+            }
+            else if ((int)resp.StatusCode == 404)
+            {
+                Warn("404：仓库中找不到工作流文件");
+                Info("请去掉 --skip-workflow 重跑，让脚本先生成并推送工作流");
+            }
         }
+    }
+    catch (Exception ex)
+    {
+        apiResult = "DISPATCH_FAIL: " + ex.Message;
+        Warn("调用异常：" + ex.Message);
+    }
+
+    Info("触发结果：" + apiResult);
+    if (apiResult.StartsWith("DISPATCH_OK"))
+    {
+        Ok("云构建已触发");
+        Info("查看进度：https://github.com/3902850445/ColorCardStudio/actions");
+    }
+    else
+    {
+        Warn("云构建未自动触发（代码已推送成功，不影响）");
+        Info("手动触发：https://github.com/3902850445/ColorCardStudio/actions");
     }
 }
 else if (skipBuild)
@@ -669,4 +756,18 @@ static string FindKeyFile()
         up = up.Parent;
     }
     return null;
+}
+
+/// <summary>从 GitHub 错误 JSON 中提取 message 字段，避免输出整段响应。</summary>
+static string ExtractApiMessage(string json)
+{
+    if (string.IsNullOrWhiteSpace(json)) return "（无响应内容）";
+    try
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("message", out var m))
+            return m.GetString() ?? "（未知）";
+    }
+    catch { }
+    return json.Length <= 120 ? json : json[..120] + "…";
 }
