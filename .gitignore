@@ -29,5 +29,6 @@ github_key.txt
 git_key.txt
 *.pat
 
-# CI 工作流由 build/workflow.csx 生成，不入库
-.github/
+# 说明：CI 工作流由 build/workflow.csx 生成，
+# 但 .github/ 必须入库 —— GitHub 只认仓库里的工作流文件，
+# 不入库则云构建永远不触发。（它是配置，不是脚本。）

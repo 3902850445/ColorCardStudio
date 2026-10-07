@@ -467,9 +467,11 @@ if (!skipWorkflow)
     }
     else
     {
-        var (addCode, _) = Run("git", new[] { "add", "-f", ".github/workflows/release.yml" }, 30, false);
-        if (addCode == 0) Ok("工作流已生成并暂存（推送后自动移除索引）");
-        else Warn("工作流暂存失败，云构建可能不触发");
+        // 必须入库：GitHub 只认仓库中的工作流文件
+        var (addCode, _) = Run("git",
+            new[] { "add", "--", ".github/workflows/release.yml" }, 30, false);
+        if (addCode == 0) Ok("工作流已生成并纳入版本控制");
+        else Warn("工作流暂存失败，云构建不会触发");
     }
 }
 
@@ -568,35 +570,17 @@ if (!pushed)
     return 2;
 }
 
-// 4.5) 推送完成：把工作流移出索引（文件保留在本地，可随时再生成）
+// 4.5) 工作流已在仓库中；若有新变更则提交，让后续构建能带上
 if (!skipWorkflow)
 {
-    Step("清理工作流索引");
-    var (rmCode, _) = Run("git", new[] { "rm", "--cached", "-q", ".github/workflows/release.yml" }, 30, false);
-    if (rmCode == 0)
-    {
-        Ok("已从索引移除（本地文件保留）");
-        Info("下次推送时脚本会自动重新生成并暂存");
-    }
-
-    // 若索引变干净则提交，消除工作区改动
     var (stCode, stOut) = Run("git", new[] { "status", "--porcelain" }, 30, false);
     if (string.IsNullOrWhiteSpace(stOut))
     {
-        var (cmCode, _) = Run("git",
-            new[] { "-c", "user.name=3902850445",
-                    "-c", "user.email=3902850445@users.noreply.github.com",
-                    "commit", "-q", "-m", "ci: 更新 GitHub Actions 工作流（由 build/workflow.csx 生成）" },
-            40, false);
-        if (cmCode == 0)
-        {
-            Ok("工作区已提交（保持干净）");
-            Info("如需同步这次提交，下次推送时会带上");
-        }
+        Ok("工作区干净");
     }
     else
     {
-        Info("工作区仍有其它改动，未自动提交");
+        Info("工作区有改动（多为工作流重新生成），提交后随下次推送同步");
         foreach (var line in stOut.Trim().Split('\n').Take(4))
             Info("  " + line);
     }
