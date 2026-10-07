@@ -98,8 +98,10 @@ string DetectProxy(bool verbose)
                      ?? Environment.GetEnvironmentVariable("HTTPS_PROXY");
     if (!string.IsNullOrEmpty(fromEnv)) return fromEnv;
 
-    int[] candidates = { 3066, 3067, 7890, 7897, 1080, 10809, 20171 };
+    // Karing 等客户端的端口可能变动（含 49152+ 动态端口），故先试常见值
+    int[] candidates = { 3066, 3067, 7890, 7897, 1080, 10809, 20171, 8888, 1087 };
     if (verbose) Info($"正在探测本地代理（候选端口：{string.Join(", ", candidates)}）…");
+    if (verbose) Info("提示：Karing 的 HTTP 代理端口可在其设置中查看，也可用 --proxy 指定");
 
     foreach (int port in candidates)
     {
@@ -426,17 +428,46 @@ for (int attempt = 1; attempt <= retries && !pushed; attempt++)
         break;
     }
 
-    // 失败诊断
-    string reason =
-        Regex.IsMatch(output, @"CONNECT tunnel failed|TLS|SSL|certificate|timed out|Failed to connect", RegexOptions.IgnoreCase)
-            ? "网络不通（代理/TLS/超时）——建议检查代理设置、改用 SSH，或换网络环境"
-        : Regex.IsMatch(output, @"Authentication failed|could not read Username|403|401", RegexOptions.IgnoreCase)
-            ? "认证失败——请确认令牌有效且具备 repo 权限与 workflow 写权限"
-        : Regex.IsMatch(output, @"Repository not found|404", RegexOptions.IgnoreCase)
-            ? "仓库不存在或令牌无权访问——请确认仓库已创建"
-        : "未知原因（见上方输出）";
+    // 失败诊断（按「网络 -> 认证 -> 权限 -> 仓库」顺序归类）
+    bool netIssue = Regex.IsMatch(output,
+        @"CONNECT tunnel failed|TLS|SSL|certificate|timed out|Failed to connect|Could not resolve",
+        RegexOptions.IgnoreCase);
+    bool authFail = Regex.IsMatch(output,
+        @"Authentication failed|could not read Username|Bad credentials|401",
+        RegexOptions.IgnoreCase);
+    bool denied = Regex.IsMatch(output, @"Permission to .* denied|403|403 Forbidden", RegexOptions.IgnoreCase);
+    bool noRepo  = Regex.IsMatch(output, @"Repository not found|404", RegexOptions.IgnoreCase);
+
+    string reason, remedy;
+    if (netIssue)
+    {
+        reason = "网络不通（代理/TLS/超时）";
+        remedy = "确认代理工具已启动；或用 --proxy http://127.0.0.1:<端口> 指定端口；或改用 --ssh";
+    }
+    else if (authFail)
+    {
+        reason = "令牌无效或已过期";
+        remedy = "在 GitHub Settings → Developer settings → Personal access tokens 重新生成（classic 或 fine-grained 均可）";
+    }
+    else if (denied)
+    {
+        reason = "令牌可读但**无写权限**";
+        remedy = "fine-grained 令牌需在 Repository access 中选中该仓库并勾选 Contents: Read and write；"
+               + "workflows 文件还需 Actions: Read and write。改权限后重新生成令牌。";
+    }
+    else if (noRepo)
+    {
+        reason = "仓库不存在或令牌无权访问";
+        remedy = "确认仓库已创建，且令牌已选中该仓库";
+    }
+    else
+    {
+        reason = "未知原因（见上方输出）";
+        remedy = "可加 --dry-run 先做本地检查";
+    }
 
     Warn($"失败原因：{reason}");
+    Info("解决建议：" + remedy);
     if (attempt < retries)
     {
         int wait = Math.Min(5 * attempt, 15);
@@ -450,11 +481,11 @@ if (!pushed)
     Console.WriteLine();
     Err("推送未成功");
     Info("可选方案：");
-    Info("  1) 换网络 / 关闭代理后重试");
-    Info("  2) 改用 SSH：先在 GitHub 添加公钥，再执行");
-    Info("     git remote set-url gh git@github.com:3902850445/ColorCardStudio.git");
-    Info("     git push gh " + branch);
-    Info("  3) 提高重试：dotnet-script build/push.csx -- --retries 8 --timeout 300");
+    Info("  1) 令牌权限不足（最常见）：重新生成令牌并勾选 Contents: Read and write");
+    Info("  2) 换网络 / 调整代理：dotnet-script build/push.csx -- --proxy http://127.0.0.1:3066");
+    Info("  3) 改用 SSH：把脚本打印的公钥加到 GitHub，然后");
+    Info("     dotnet-script build/push.csx -- --ssh");
+    Info("  4) 提高重试：dotnet-script build/push.csx -- --retries 8 --timeout 300");
     if (lastOutput.Length > 0)
     {
         Console.WriteLine();
