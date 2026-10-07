@@ -5,6 +5,7 @@
 // 用法：
 //   dotnet-script build/push.csx                          # 推送并触发构建
 //   dotnet-script build/push.csx -- --skip-build          # 只推送，不触发构建
+//   dotnet-script build/push.csx -- --skip-workflow       # 不生成 CI 工作流
 //   dotnet-script build/push.csx -- --retries 5            # 推送重试次数（默认 3）
 //   dotnet-script build/push.csx -- --timeout 300          # 每次尝试超时秒数（默认 120）
 //   dotnet-script build/push.csx -- --dry-run              # 只看将推送什么
@@ -13,6 +14,8 @@
 //   COLORPROD_PROXY=http://127.0.0.1:3066 dotnet-script build/push.csx
 //
 // 设计要点：
+//   0. 仓库内只允许 csx / ps1 / py 脚本，CI 工作流由 build/workflow.csx 生成。
+//      本脚本推送前临时生成并暂存，推送后从索引移除（文件留在本地）。
 //   1. 全程实时输出状态（每步打时间戳），长时间无输出会自动打印「仍在进行」心跳，
 //      避免看起来像卡死。
 //   2. 推送失败自动重试，并诊断失败原因（网络 / 认证 / 仓库不存在）。
@@ -62,6 +65,7 @@ int timeoutSec = int.TryParse(optOf("timeout", "120"), out var t) ? Math.Max(30,
 bool skipBuild = hasFlag("skip-build");
 bool dryRun = hasFlag("dry-run");
 bool useSsh = hasFlag("ssh");
+bool skipWorkflow = hasFlag("skip-workflow");
 string proxyOverride = optOf("proxy", "");
 
 // ---------------------------------------------------------------- 状态输出
@@ -401,6 +405,29 @@ else
     Info("也可显式指定：dotnet-script build/push.csx -- --proxy http://127.0.0.1:3066");
 }
 
+// 3.6) CI 工作流：仓库只保留 csx/ps1/py，yml 由脚本生成
+//      GitHub 需要仓库里存在该文件才能运行云构建，故这里临时生成并提交，
+//      推送成功后立即从索引移除（文件留在本地磁盘，随时可再生成）。
+if (!skipWorkflow)
+{
+    Step("准备 CI 工作流");
+    var wf = Run("dotnet-script",
+        new[] { Path.Combine(root, "build", "workflow.csx"), "--", "--force" }, 180);
+
+    if (wf.code != 0)
+    {
+        Warn("工作流生成失败，云构建将不可用");
+        foreach (var line in wf.output.Trim().Split('\n').TakeLast(3))
+            Warn("  " + line);
+    }
+    else
+    {
+        var (addCode, _) = Run("git", new[] { "add", "-f", ".github/workflows/release.yml" }, 30, false);
+        if (addCode == 0) Ok("工作流已生成并暂存（推送后自动移除索引）");
+        else Warn("工作流暂存失败，云构建可能不触发");
+    }
+}
+
 // 4) 推送（带重试）
 Console.WriteLine();
 Step($"推送到 GitHub（最多 {retries} 次尝试）");
@@ -494,6 +521,40 @@ if (!pushed)
             Console.WriteLine("      │ " + line);
     }
     return 2;
+}
+
+// 4.5) 推送完成：把工作流移出索引（文件保留在本地，可随时再生成）
+if (!skipWorkflow)
+{
+    Step("清理工作流索引");
+    var (rmCode, _) = Run("git", new[] { "rm", "--cached", "-q", ".github/workflows/release.yml" }, 30, false);
+    if (rmCode == 0)
+    {
+        Ok("已从索引移除（本地文件保留）");
+        Info("下次推送时脚本会自动重新生成并暂存");
+    }
+
+    // 若索引变干净则提交，消除工作区改动
+    var (stCode, stOut) = Run("git", new[] { "status", "--porcelain" }, 30, false);
+    if (string.IsNullOrWhiteSpace(stOut))
+    {
+        var (cmCode, _) = Run("git",
+            new[] { "-c", "user.name=3902850445",
+                    "-c", "user.email=3902850445@users.noreply.github.com",
+                    "commit", "-q", "-m", "ci: 更新 GitHub Actions 工作流（由 build/workflow.csx 生成）" },
+            40, false);
+        if (cmCode == 0)
+        {
+            Ok("工作区已提交（保持干净）");
+            Info("如需同步这次提交，下次推送时会带上");
+        }
+    }
+    else
+    {
+        Info("工作区仍有其它改动，未自动提交");
+        foreach (var line in stOut.Trim().Split('\n').Take(4))
+            Info("  " + line);
+    }
 }
 
 // 5) 验证远程分支

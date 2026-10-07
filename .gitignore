@@ -28,3 +28,6 @@ build/SetupLauncher/obj/
 github_key.txt
 git_key.txt
 *.pat
+
+# CI 工作流由 build/workflow.csx 生成，不入库
+.github/
