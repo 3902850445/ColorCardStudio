@@ -33,7 +33,7 @@ jobs:
   build:
     name: 构建 ${{ matrix.rid }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     strategy:
       fail-fast: false
@@ -48,7 +48,7 @@ jobs:
           - rid: linux-arm64
             os: ubuntu-24.04-arm
           - rid: osx-x64
-            os: macos-13
+            os: macos-15-intel
           - rid: osx-arm64
             os: macos-latest
 
@@ -91,6 +91,7 @@ jobs:
           dotnet-script build/pack.csx -- $ARGS
 
       - name: 上传产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ColorMod-${{ matrix.rid }}
@@ -108,7 +109,9 @@ jobs:
     name: 汇总并分发安装包
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish != false
+    # always()：单个平台失败/超时不能阻塞发布 ——
+    # 其余平台已构建成功时，仍应把产物传上 Releases。
+    if: always() && (startsWith(github.ref, 'refs/tags/v') || inputs.publish != false)
 
     steps:
       - name: 检出代码
