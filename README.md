@@ -1,15 +1,19 @@
 # ColorMod 色卡工坊
 
 基于 **Photino.NET** 的桌面色卡查询与取色工具，以 **CMYK 为主**、兼容 RGB 与各色值代码。
+内置 **PANTONE Solid Coated 2024** 潘通色卡（3219 色），支持中英文双语色名与图片取色自动匹配。
 
 ## 功能
 
 | 模块 | 说明 |
 | --- | --- |
-| 色卡库 | 联网整合 6 套主流色卡共 **892 色**，支持按 13 个色相分类筛选 |
+| 色卡库 | 联网整合 6 套主流色卡共 **892 色** + PANTONE Solid Coated 2024 **3219 色**，支持按 13 个色相分类筛选 |
 | 搜索 | 支持色名 / HEX / `rgb()` / `cmyk()` 直接查询，如输入 `cmyk(0 85 38 12)` 可反查颜色 |
 | 图片取色 | 读取图片提取主色，自动识别 CMYK 印刷稿与 RGB 屏幕稿；支持按钮选择与拖放 |
 | 中英文色名 | 每色同时给出中文名与英文名，如「爱丽丝蓝 / aliceblue」「蓝 · 偏深 / blue-600」 |
+| PANTONE 双语 | 3219 色潘通色卡，色名自动翻译为中文（如 Rubine Red → 宝石红），纯编号色回退为「编号 + 色相族」 |
+| 取色匹配潘通 | 图片取色结果自动按 Lab ΔE 距离匹配最近似潘通色，显示色名、编号与色值 |
+| 取色中文重命名 | 取色结果支持双击原位编辑中文名，可保存为预设 |
 | 点击复制 | 每个色值分量独立可点：点 C 就只复制 C，点 R 就只复制 R；整行点击复制整组 |
 | HEX 整体复制 | 颜色代码作为一个整体复制，不拆分（符合代码使用习惯） |
 | 详情抽屉 | 单色查看 CMYK 分色墨量条、总墨量合规、TAC 校验、Lab、HSL、WCAG 对比度 |
@@ -118,6 +122,7 @@ CSS 变量、HEX/名称列表。导入时：
 
 | 色卡 | 颜色数 | 来源 |
 | --- | --- | --- |
+| PANTONE Solid Coated 2024 | 3219 | GitHub 非官方数据集（Lab D50 值，已转换为 sRGB） |
 | Radix Colors | 287 | unpkg（24 个色系） |
 | Tailwind CSS v4 | 241 | unpkg（OKLCH 已在抓取期转换为 sRGB） |
 | CSS 命名颜色 | 139 | color-name |
@@ -298,5 +303,7 @@ Core/ColorExtractor.cs   图片解码、色彩空间探测、颜色量化
 Core/PaletteStore.cs     预设持久化 + ASE/GPL/CSS/JSON 导入
 Core/PaletteFetcher.cs   色卡联网抓取（GitHub 镜像加速）
 Core/Log.cs              系统日志（文件 + 内存缓冲，保留 7 天）
-wwwroot/                 前端界面（原生 HTML/CSS/JS）
+build/gen-pantone.ps1    潘通色卡 Lab→HEX 转换脚本
+wwwroot/                  前端界面（原生 HTML/CSS/JS）
+wwwroot/data/pantone.json   PANTONE 3219 色数据（含 HEX + Lab）
 ```
