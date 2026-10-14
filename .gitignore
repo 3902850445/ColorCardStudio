@@ -1,0 +1,34 @@
+# 构建产物
+bin/
+obj/
+publish/
+artifacts/
+*.user
+
+# 日志与运行时数据
+logs/
+*.log
+*.broken.*
+
+# 编辑器
+.vs/
+.idea/
+.vscode/
+
+# 密钥文件（严禁提交）
+git_key.txt
+*.key
+*.token
+
+# 安装壳构建输出
+build/SetupLauncher/bin/
+build/SetupLauncher/obj/
+
+# 令牌文件（严禁提交）
+github_key.txt
+git_key.txt
+*.pat
+
+# 说明：CI 工作流由 build/workflow.csx 生成，
+# 但 .github/ 必须入库 —— GitHub 只认仓库里的工作流文件，
+# 不入库则云构建永远不触发。（它是配置，不是脚本。）

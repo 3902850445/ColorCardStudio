@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ColorMod 色卡工坊</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">CM</div>
+      <div>
+        <h1>ColorMod</h1>
+        <p>色卡工坊 · CMYK 优先</p>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="library">
+        <span class="ico">▦</span><span>色卡库</span>
+      </button>
+      <button class="nav-item" data-view="picker">
+        <span class="ico">◉</span><span>图片取色</span>
+      </button>
+      <button class="nav-item" data-view="presets">
+        <span class="ico">★</span><span>我的预设</span>
+        <span class="badge" id="presetCount">0</span>
+      </button>
+      <button class="nav-item" data-view="standards">
+        <span class="ico">◎</span><span>印刷标准</span>
+      </button>
+      <button class="nav-item" data-view="logs">
+        <span class="ico">▤</span><span>系统日志</span>
+        <span class="badge err" id="logBadge" hidden>0</span>
+      </button>
+    </nav>
+
+    <div class="side-section">
+      <label class="side-label">印刷标准（影响 CMYK 换算）</label>
+      <select id="standardSelect" class="select"></select>
+      <div class="tac-note" id="tacNote"></div>
+    </div>
+
+    <div class="side-foot">
+      <button class="btn ghost sm" id="importBtn" title="支持 ColorMod 预设 JSON / ASE / GPL / CSS / HEX">导入色卡</button>
+      <button class="btn ghost sm" id="exportBtn" title="把全部预设导出为 JSON，可再导入回本机或其他电脑">导出全部预设</button>
+      <button class="btn ghost sm" id="exportViewBtn" title="导出当前正在浏览的这一组颜色">导出当前色组</button>
+      <button class="btn ghost sm" id="openDirBtn" title="打开预设数据所在文件夹">打开数据目录</button>
+      <div class="data-dir" id="dataDir"></div>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+    <header class="topbar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input id="searchInput" class="search" type="text" autocomplete="off"
+               placeholder="搜索色名 / HEX / RGB / CMYK，如 #0d6efd、rgb(13 110 253)、珊瑚红" />
+        <button class="clear" id="clearSearch" title="清空">✕</button>
+      </div>
+      <div class="topbar-right">
+        <span class="stat" id="statText"></span>
+        <button class="btn ghost" id="refreshBtn" title="联网重新抓取最新主流色卡">↻ 更新色卡</button>
+      </div>
+    </header>
+
+    <!-- 视图：色卡库 -->
+    <section class="view" id="view-library">
+      <div class="filters">
+        <div class="palette-tabs" id="paletteTabs"></div>
+        <div class="hue-chips" id="hueChips"></div>
+      </div>
+      <div class="palette-meta" id="paletteMeta"></div>
+      <div class="grid" id="paletteGrid"></div>
+      <div class="empty" id="libraryEmpty" hidden>
+        <p>没有匹配的颜色</p>
+        <span>换个关键词，或切换色卡来源</span>
+      </div>
+    </section>
+
+    <!-- 视图：图片取色 -->
+    <section class="view" id="view-picker" hidden>
+      <div class="picker-grid">
+        <div class="picker-left">
+          <div class="dropzone" id="dropzone">
+            <div class="dz-inner">
+              <div class="dz-ico">🖼</div>
+              <h3>拖入图片，或点击选择</h3>
+              <p>支持 CMYK 印刷稿（JPEG）与 RGB 屏幕图；自动识别色彩空间并按所选标准换算 CMYK</p>
+              <button class="btn primary" id="pickFileBtn">选择图片…</button>
+            </div>
+            <div class="dz-status" id="pickStatus" hidden></div>
+          </div>
+          <div class="picker-opts">
+            <label>提取色数
+              <input type="range" id="colorCount" min="4" max="32" value="16" />
+              <output id="colorCountOut">16</output>
+            </label>
+          </div>
+          <div class="extract-info" id="extractInfo"></div>
+        </div>
+        <div class="picker-right">
+          <div class="extract-head">
+            <h3>提取结果</h3>
+            <div class="extract-actions">
+              <input id="presetName" class="mini-input" type="text" placeholder="为这组颜色命名…" />
+              <button class="btn primary sm" id="saveExtractBtn">保存为预设</button>
+              <button class="btn ghost sm" id="copyAllBtn">复制全部 CMYK</button>
+            </div>
+          </div>
+          <div class="extract-grid" id="extractGrid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 视图：我的预设 -->
+    <section class="view" id="view-presets" hidden>
+      <div class="preset-head">
+        <h3>自定义预设</h3>
+        <p>保存的预设以 JSON 存于本机，可随时导入导出</p>
+      </div>
+      <div class="preset-list" id="presetList"></div>
+      <div class="empty" id="presetEmpty">
+        <p>还没有预设</p>
+        <span>在「图片取色」中提取颜色并保存，或导入第三方色卡文件（ASE / GPL / CSS / HEX）</span>
+      </div>
+    </section>
+
+    <!-- 视图：印刷标准 -->
+    <section class="view" id="view-standards" hidden>
+      <div class="std-head">
+        <h3>印刷标准知识库</h3>
+        <p>CMYK 数值必须依附于具体印刷条件才有意义。下列数据依据 ISO 12647-2、FOGRA 39/47/51、ECI、
+           IDEAlliance GRACoL 等公开标准整理，用于总墨量校验与实地色参考。</p>
+      </div>
+
+      <div class="std-guide">
+        <h4>怎么判断该用哪个标准？</h4>
+        <p class="std-guide-lead">
+          CMYK 没有绝对值。同一个 <code>C0 M80 Y60 K0</code> 印在铜版纸上和在新闻纸上完全不同，
+          因为纸张吸墨能力与印刷方式决定了能承载多少墨、能达到什么色域。
+          <b>标准 = 纸张类型 × 印刷工艺 × 地区惯例</b>，三者共同确定。
+        </p>
+        <div class="guide-steps">
+          <div class="guide-step">
+            <span class="step-no">1</span>
+            <div>
+              <b>先问印什么纸</b>
+              <ul>
+                <li><b>铜版纸 / 涂布纸</b>（画册、包装盒）→ PSO Coated v3、ISO Coated v2</li>
+                <li><b>非涂布纸 / 胶版纸</b>（说明书、报纸）→ PSO Uncoated、FOGRA39</li>
+                <li><b>不确定</b> → 问印刷厂要 ICC 配置</li>
+              </ul>
+            </div>
+          </div>
+          <div class="guide-step">
+            <span class="step-no">2</span>
+            <div>
+              <b>再问什么工艺</b>
+              <ul>
+                <li><b>单张纸胶印</b>（画册、名片）→ 限墨可到 330%</li>
+                <li><b>轮转胶印 / 商业轮转</b>（报纸、期刊）→ 限墨 260~300%</li>
+                <li><b>数码印刷</b>（短单、个性化）→ CGATS TR 001</li>
+              </ul>
+            </div>
+          </div>
+          <div class="guide-step">
+            <span class="step-no">3</span>
+            <div>
+              <b>最后看地区惯例</b>
+              <ul>
+                <li><b>欧洲</b> → ISO Coated / PSO 系列，ECI 发布</li>
+                <li><b>北美</b> → GRACoL、SWOP，IDEAlliance 发布</li>
+                <li><b>日本</b> → Japan Color</li>
+              </ul>
+            </div>
+          </div>
+          <div class="guide-step">
+            <span class="step-no">✓</span>
+            <div>
+              <b>权威做法</b>
+              <ul>
+                <li>直接向印刷厂索取 <b>PDF/X-4</b> 与其 ICC 配置，按它为准</li>
+                <li>不确定时用 <b>PSO Coated v3</b>（现行国际默认，限墨 300%）</li>
+                <li>本工具的 CMYK 是按标准特性的<b>模型换算值</b>，非 ICC 软打样结果</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="std-grid" id="stdGrid"></div>
+    </section>
+    <!-- 视图：系统日志 -->
+    <section class="view" id="view-logs" hidden>
+      <div class="log-head">
+        <div>
+          <h3>系统日志</h3>
+          <p>记录启动、取色、导入导出与通信异常。日志同时写入数据目录下的 <code>logs/</code>，按天分文件保留 7 天。</p>
+        </div>
+        <div class="log-tools">
+          <select id="logFilter" class="select sm">
+            <option value="Debug">全部</option>
+            <option value="Info">信息及以上</option>
+            <option value="Warn">警告及以上</option>
+            <option value="Error">仅错误</option>
+          </select>
+          <button class="btn ghost sm" id="logRefreshBtn">↻ 刷新</button>
+          <button class="btn primary sm" id="traceBtn">消息追踪</button>
+          <button class="btn ghost sm" id="logExportBtn">导出</button>
+          <button class="btn ghost sm" id="logOpenBtn">打开目录</button>
+        </div>
+      </div>
+      <div class="trace-panel" id="tracePanel" hidden>
+        <div class="trace-head">
+          <strong>端到端消息追踪</strong>
+          <span class="trace-hint">
+            按序号对齐两端记录即可定位断点：后端有而前端无 = 传输丢失；
+            前端有但解析失败 = 格式问题（详情给出原始字节）。
+          </span>
+          <button class="btn ghost sm" id="traceRefreshBtn">刷新</button>
+          <button class="btn ghost sm" id="traceExportBtn">导出</button>
+        </div>
+        <div class="trace-list" id="traceList"></div>
+      </div>
+      <div class="log-dir" id="logDir"></div>
+      <div class="log-list" id="logList"></div>
+    </section>
+  </main>
+</div>
+
+<!-- 详情抽屉 -->
+<div class="drawer" id="drawer" hidden>
+  <div class="drawer-mask" id="drawerMask"></div>
+  <aside class="drawer-panel">
+    <button class="drawer-close" id="drawerClose">✕</button>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
